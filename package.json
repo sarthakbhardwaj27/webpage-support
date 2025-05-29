@@ -1,0 +1,21 @@
+{
+  "name": "webpage_support",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "1. scrape website 2. vectordb (chromadb)   3. recursive scraping of webpages 4. chat bot",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.9.0",
+    "cheerio": "^1.0.0",
+    "chromadb": "^2.4.6",
+    "dotenv": "^16.5.0",
+    "openai": "^4.103.0",
+    "puppeteer": "^24.9.0"
+  }
+}
