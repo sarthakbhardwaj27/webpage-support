@@ -1,44 +1,32 @@
-import dotenv from "dotenv";
 import axios from "axios";
-import * as cheerio from "cheerio";
-import puppeteer from "puppeteer";
+import * as Cheerio from "cheerio";
 import OpenAI from "openai";
+import dotenv from "dotenv";
 import { ChromaClient } from "chromadb";
-import { headersArray } from "puppeteer";
 
 dotenv.config();
 
-const url = "https://portfolio-sarthakbhardwaj27s-projects.vercel.app/";
 const openai = new OpenAI();
 
-const chromaClient = new ChromaClient({path: "http://localhost:8000"});
-chromaClient.heartbeat()
-const WEB_COLLECTION = 'WEB_SCRAPED_DATA_COLLECTION_1';
+const chromaClient = new ChromaClient({ path: "http://localhost:8000" });
+const WEB_COLLECTION = "WEB_SCRAPED_DATA_COLLECTION_1";
+chromaClient.heartbeat();
 
-async function insertIntoDB({ embedding, url , body='', head}){
-    // const collection = await chromaClient.createCollection({
-    //     name: WEB_COLLECTION,
-    // });
-    const collection = await chromaClient.getOrCreateCollection({ name: WEB_COLLECTION });
+async function insertIntoDB({ embedding, url, body = "", head }) {
+  const collection = await chromaClient.getOrCreateCollection({
+    name: WEB_COLLECTION,
+  });
 
-    await collection.add({
-        ids: [url],
-        embeddings: [embedding],
-        metadatas: [{url,body,head}]
-    })
+  await collection.add({
+    ids: [url],
+    embeddings: embedding,
+    metadatas: [{ url, body, head }],
+  });
 }
 
-
-async function scrapeWebsite(url = "") {
-  //using puppeteer to scrapte instead to cherio bcoz cherio only works for static html website but my portfolio is via reactjs
-
-  const browser = await puppeteer.launch();
-  const page = await browser.newPage();
-  await page.goto(url, { waitUntil: "networkidle2" });
-
-  const content = await page.content(); // full rendered HTML
-
-  const $ = cheerio.load(content);
+async function scrapeWebpage(url = "") {
+  const { data } = await axios.get(url);
+  const $ = Cheerio.load(data);
 
   const pageHead = $("head").html();
   const pageBody = $("body").html();
@@ -46,24 +34,28 @@ async function scrapeWebsite(url = "") {
   const internalLinks = new Set();
   const externalLinks = new Set();
 
-  //get links
   $("a").each((_, el) => {
     const link = $(el).attr("href");
+    if (link === "/") return;
     if (link.startsWith("https")) {
       externalLinks.add(link);
     } else {
       internalLinks.add(link);
     }
   });
-  //console.log(pageBody)
-  // console.log(internalLinks)
-
-  await browser.close();
-  return { head: pageHead, body: pageBody, internalLinks, externalLinks };
+  //console.log(internalLinks)
+  return {
+    head: pageHead,
+    body: pageBody,
+    internalLinks: Array.from(internalLinks),
+    externalLinks: Array.from(externalLinks),
+  };
 }
 
-async function generateVectorEmbeddings({text }) {
-  //used openai vector embeddings
+async function generateVectorEmbeddings({ text }) {
+  if (!text || text.trim() === "") {
+    throw new Error("Text for embedding generation is empty or undefined");
+  }
   const embedding = await openai.embeddings.create({
     model: "text-embedding-3-small",
     input: text,
@@ -72,50 +64,89 @@ async function generateVectorEmbeddings({text }) {
   return embedding.data[0].embedding;
 }
 
-//create chunks 
-function chunkText(text,chunkSize){
-    if(!text || chunkSize<=0)   return[];
-    const words = text.split(/\s+/);
-    const chunks = [];
+//create chunks
+function chunkText(text, chunkSize) {
+  if (!text || chunkSize <= 0) return [];
+  const words = text.split(/\s+/);
+  const chunks = [];
 
-    for(let i=0;i<words.length;i+=chunkSize){
-        chunks.push(words.slice(i,i+chunkSize).join(' '));
+  for (let i = 0; i < words.length; i += chunkSize) {
+    chunks.push(words.slice(i, i + chunkSize).join(" "));
+  }
+  return chunks;
+}
+const visitedUrls = new Set();
+async function ingest(url = "") {
+  console.log(`-> Ingesting ${url}`);
+  const { head, body, internalLinks } = await scrapeWebpage(url);
+
+  // const headEmbeddings = await generateVectorEmbeddings(head);
+  // await insertIntoDB({embeddings: headEmbeddings, url, body, head});
+
+  const bodyChunks = chunkText(body, 1000);
+  for (const chunk of bodyChunks) {
+    //console.log(chunk + '##############');
+    const bodyEmbeddings = await generateVectorEmbeddings({ text: chunk });
+    // console.log(bodyEmbeddings)
+    await insertIntoDB({ embedding: bodyEmbeddings, url, body: chunk, head });
+  }
+
+  for (const link of internalLinks) {
+    try {
+      const _url = new URL(link, url).href; // Safely resolve relative paths
+      if (visitedUrls.has(_url)) {
+        return;
+      } else if (!visitedUrls.has(_url)) {
+        console.log(_url);
+        visitedUrls.add(_url);
+        await ingest(_url);
+      }
+    } catch (err) {
+      console.warn(`Invalid link skipped: ${link}`);
     }
-    return chunks;
+  }
+  console.log(`-> Ingested ${url}`);
 }
 
-async function ingest(url=''){
-    console.log(` -> Ingesting ${url}`);
-    //scrape page from above function: 
-    const {head,body,internalLinks} = await scrapeWebsite(url);
-    //create embeddings
-    const bodyChunks = chunkText(body,2000);
-    //console.log(bodyChunks)
-    const headEmbeddings = await generateVectorEmbeddings({text:head});
-    //console.log(headEmbeddings)
-    await insertIntoDB({embedding: headEmbeddings, url})
+async function chat(question = "") {
+  const questionEmbedding = await generateVectorEmbeddings({ text: question });
+  const collection = await chromaClient.getOrCreateCollection({
+    name: WEB_COLLECTION,
+  });
 
-    for(const chunk in bodyChunks){
-        const bodyEmbeddings = await generateVectorEmbeddings({text:chunk});//cant pass whole body as parameters because it is too large for open ai to create embeddings so we have to create chunk
-        await insertIntoDB({embedding: headEmbeddings, url, head, body:chunk});
-        //console.log(bodyEmbeddings)
-    }
+  const collectionResult = await collection.query({
+    nResults: 3,
+    queryEmbeddings: questionEmbedding,
+  });
 
-    //console.log(internalLinks)
-    // for(const link in internalLinks){
-    //     const _url = `${url}${link}`;
-    //     await ingest(_url);
-    // }
+  const body = collectionResult.metadatas[0].map((e) => e.body);
+  const url = collectionResult.metadatas[0].map((e) => e.url);
+  //console.log(body)
 
-    console.log(` -> Ingested Success ${url}`);
-
+  //chatgpt response
+  const reponse = await openai.chat.completions.create({
+    model: "chatgpt-4o-latest",
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are an AI support agent, expert in providing support to users on behalf of a webpage. Given the context about page content, reply the user accordingly",
+      },
+      {
+        role: 'user',
+        content: `
+        Query: ${question}\n\n
+        URLs: ${url.join(', ')}
+        Retrieved context: ${body.join(', ')}
+        `,
+      }
+    ],
+  });
+  console.log(`Bot replied: ${reponse.choices[0].message.content}`);
 }
 
-async function chat(question = ''){
-    //time stamp 34:51
-}
+chat("Who is Piyush?");
 
-// ingest(url);
-// ingest('https://portfolio-sarthakbhardwaj27s-projects.vercel.app/#about')
-// ingest('https://portfolio-sarthakbhardwaj27s-projects.vercel.app/#projects')
-// ingest('https://portfolio-sarthakbhardwaj27s-projects.vercel.app/#contact')
+// ingest("https://www.piyushgarg.dev/");
+//scrapeWebpage("https://www.piyushgarg.dev/").then(console.log);
+//start docker via docker compose up
