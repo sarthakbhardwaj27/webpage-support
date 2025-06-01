@@ -36,12 +36,22 @@ async function scrapeWebpage(url = "") {
 
   $("a").each((_, el) => {
     const link = $(el).attr("href");
+    console.log(link)
     if (link === "/") return;
-    if (link.startsWith("https")) {
-      externalLinks.add(link);
-    } else {
-      internalLinks.add(link);
+    try{
+        if(link.includes("hevo")){
+            console.log(link)
+            internalLinks.add(link);
+        }
+    }catch(err){
+        console.log(`Ignoring ${link} due to error ${err}`)
+        return;
     }
+    // if (link.includes("hevodata")) {
+    //   internalLinks.add(link);
+    // } else {
+    //   externalLinks.add(link);
+    // }
   });
   //console.log(internalLinks)
   return {
@@ -76,6 +86,7 @@ function chunkText(text, chunkSize) {
   return chunks;
 }
 const visitedUrls = new Set();
+
 async function ingest(url = "") {
   console.log(`-> Ingesting ${url}`);
   const { head, body, internalLinks } = await scrapeWebpage(url);
@@ -145,8 +156,8 @@ async function chat(question = "") {
   console.log(`Bot replied: ${reponse.choices[0].message.content}`);
 }
 
-chat("Who is Piyush?");
+chat("What is Hevo? Does it support Redshift as a source?");
 
-// ingest("https://www.piyushgarg.dev/");
-//scrapeWebpage("https://www.piyushgarg.dev/").then(console.log);
-//start docker via docker compose up
+
+//ingest('https://docs.hevodata.com/')
+
